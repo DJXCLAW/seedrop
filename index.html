@@ -2,159 +2,158 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Seed Dropper Plinko</title>
+    <title>Endless Seed Dropper Plinko</title>
     <style>
-        body { text-align: center; background: #eef; margin: 0; overflow: hidden; }
-        canvas { border: 1px solid black; display: block; margin: 0 auto; background: #fff; }
-        #shop { margin-top: 10px; }
+        :root { --bar-height: 140px; }
+        body { margin:0; background:#eef; font-family:Arial, sans-serif; display:flex; flex-direction:column; height:100vh; }
+        #gameCanvas { flex:1 1 auto; border:1px solid #000; background:#fff; display:block; margin:0 auto; }
+        /* Bottom bar */
+        #bottomBar { height:var(--bar-height); background:#222; color:#fff; display:flex; flex-direction:column; padding:10px; box-sizing:border-box; }
+        #stats { font-size:14px; margin-bottom:6px; }
+        #shopControls { display:flex; gap:6px; flex-wrap:wrap; }
+        #shopControls button { padding:6px 10px; font-size:14px; cursor:pointer; border:none; border-radius:4px; }
+        #shopControls button:disabled { opacity:0.4; cursor:not-allowed; }
+        .circle { background:#8d6e63; color:#fff; }
+        .square { background:#f57c00; color:#fff; }
+        .triangle { background:#7b1fa2; color:#fff; }
+        #startRoundBtn { background:#1976d2; color:#fff; margin-left:auto; }
     </style>
 </head>
 <body>
-    <h1>Seed Dropper Plinko</h1>
-    <p>Use your money to buy bumpers and press "Start Round" to drop a seed.</p>
-    <canvas id="gameCanvas" width="400" height="600"></canvas>
-    <div id="shop">
-        <h2>Shop</h2>
-        <p id="moneyDisplay"></p>
-        <button onclick="buyBumper()">Buy Bumper ($5)</button>
-        <button id="startRoundBtn" onclick="startNextRound()">Start Round</button>
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Bottom UI Bar -->
+    <div id="bottomBar">
+        <div id="stats"></div>
+        <div id="shopControls">
+            <button id="buyCircle" class="circle" onclick="buyBumper('circle')">Circle ($5)</button>
+            <button id="buySquare" class="square" onclick="buyBumper('square')">Square ($7)</button>
+            <button id="buyTriangle" class="triangle" onclick="buyBumper('triangle')">Triangle ($10)</button>
+            <button id="startRoundBtn" onclick="startNextRound()">Start Round</button>
+        </div>
+        <div id="pendingDisplay" style="margin-top:6px;font-size:12px;"></div>
     </div>
 
     <script>
-        const canvas = document.getElementById("gameCanvas");
-        const ctx = canvas.getContext("2d");
+        /* ------------ Canvas & Global Data ------------- */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
 
         const seedRadius = 8;
+        let bumpers = [], pendingBumpers = [];
         let seed = null;
-        let bumpers = [];
-        let money = 10;
+        let money = 10, score = 0, quota = 100;
         let inShop = true;
-        let bumpersAvailable = 0;
+        let stock = { circle: 5, square: 3, triangle: 2 };
 
+        /* ------------ Canvas Resize ------------- */
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight - parseInt(getComputedStyle(document.documentElement).getPropertyValue('--bar-height'));
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        /* ------------- Classes --------------- */
         class Seed {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y;
-                this.vx = 0;
-                this.vy = 2;
-            }
-
+            constructor(x, y) { this.x = x; this.y = y; this.vx = 0; this.vy = 2; this.value = 0; }
             update() {
-                this.vy += 0.2;
-                this.x += this.vx;
-                this.y += this.vy;
-
-                this.handleCollisions();
-
+                this.vy += 0.2; this.x += this.vx; this.y += this.vy;
+                this.handleCollisions(bumpers);
                 if (this.x < seedRadius) { this.x = seedRadius; this.vx = Math.abs(this.vx); }
                 if (this.x > canvas.width - seedRadius) { this.x = canvas.width - seedRadius; this.vx = -Math.abs(this.vx); }
             }
-
-            draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, seedRadius, 0, Math.PI * 2);
-                ctx.fillStyle = "green";
-                ctx.fill();
-            }
-
-            handleCollisions() {
-                for (let peg of bumpers) {
-                    let dx = this.x - peg.x;
-                    let dy = this.y - peg.y;
-                    let dist = Math.sqrt(dx * dx + dy * dy);
-
-                    if (dist < seedRadius + peg.radius) {
-                        const angle = Math.atan2(dy, dx);
-                        const bounceSpeed = 2;
-                        this.vx = bounceSpeed * Math.cos(angle);
-                        this.vy = Math.abs(this.vy) * 0.8;
-
-                        if (Math.abs(this.vx) < 1) {
-                            this.vx += (Math.random() < 0.5 ? -1 : 1);
-                        }
+            draw() { ctx.beginPath(); ctx.arc(this.x, this.y, seedRadius, 0, Math.PI * 2); ctx.fillStyle = 'green'; ctx.fill(); }
+            handleCollisions(list) {
+                for (let b of list) {
+                    let dx = this.x - b.x, dy = this.y - b.y;
+                    let d = Math.hypot(dx, dy);
+                    if (d < seedRadius + b.radius) {
+                        let nx = dx / d, ny = dy / d;
+                        let dot = this.vx * nx + this.vy * ny;
+                        this.vx = (this.vx - 2 * dot * nx) * 0.8;
+                        this.vy = (this.vy - 2 * dot * ny) * 0.8;
+                        score += b.value; this.value += b.value;
                     }
                 }
             }
         }
-
         class Bumper {
-            constructor(x, y, radius) {
-                this.x = x;
-                this.y = y;
-                this.radius = radius;
-            }
-
+            constructor(x, y, r, v, t) { this.x = x; this.y = y; this.radius = r; this.value = v; this.type = t; }
             draw() {
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fillStyle = "blue";
-                ctx.fill();
+                ctx.save(); ctx.translate(this.x, this.y);
+                if (this.type === 'circle') { ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fillStyle = '#8d6e63'; ctx.fill(); }
+                else if (this.type === 'square') { ctx.fillStyle = '#f57c00'; ctx.fillRect(-this.radius, -this.radius, this.radius * 2, this.radius * 2); }
+                else { ctx.fillStyle = '#7b1fa2'; ctx.beginPath(); ctx.moveTo(0, -this.radius); ctx.lineTo(this.radius, this.radius); ctx.lineTo(-this.radius, this.radius); ctx.closePath(); ctx.fill(); }
+                ctx.restore();
             }
         }
 
-        function dropSeed() {
-            seed = new Seed(canvas.width / 2, 20);
+        /* ------------- UI Helpers ------------- */
+        function updateUI() {
+            document.getElementById('stats').innerText = `Money: $${money}   Score: ${score}   Quota: ${quota}`;
+            document.getElementById('pendingDisplay').innerText = `Pending placement: ${pendingBumpers.join(', ') || 'None'}`;
+            ['Circle', 'Square', 'Triangle'].forEach(t => {
+                document.getElementById('buy' + t).disabled = stock[t.toLowerCase()] === 0 || !inShop;
+            });
+            document.getElementById('startRoundBtn').disabled = !inShop;
         }
 
-        function draw() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            bumpers.forEach(b => b.draw());
-
-            if (seed) {
-                seed.update();
-                seed.draw();
-
-                if (seed.y > canvas.height) {
-                    money += 10;
-                    openShop();
-                    seed = null;
-                }
-            }
-
-            drawHUD();
-            requestAnimationFrame(draw);
-        }
-
-        function drawHUD() {
-            ctx.font = "16px Arial";
-            ctx.fillStyle = "black";
-            ctx.fillText(`Money: $${money}`, 10, 20);
-        }
-
-        function openShop() {
-            inShop = true;
-            document.getElementById("shop").style.display = "block";
-            document.getElementById("moneyDisplay").innerText = `You have $${money}`;
-        }
-
-        function startNextRound() {
-            inShop = false;
-            document.getElementById("shop").style.display = "none";
-            dropSeed();
-        }
-
-        function buyBumper() {
-            if (money >= 5) {
-                money -= 5;
-                bumpersAvailable++;
-                alert("Click on canvas to place bumper(s) before starting next round.");
+        /* ------------- Shop Logic ------------- */
+        function buyBumper(type) {
+            if (!inShop) return;
+            const cost = { circle: 5, square: 7, triangle: 10 }[type];
+            if (money >= cost && stock[type] > 0) {
+                money -= cost; stock[type]--; pendingBumpers.push(type); updateUI();
             }
         }
 
-        canvas.addEventListener("click", (e) => {
-            if (inShop && bumpersAvailable > 0) {
-                const rect = canvas.getBoundingClientRect();
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                bumpers.push(new Bumper(x, y, 8));
-                bumpersAvailable--;
+        /* ------------- Canvas Click ------------- */
+        canvas.addEventListener('click', e => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left, y = e.clientY - rect.top;
+
+            if (inShop && pendingBumpers.length) {
+                // Place purchased bumper
+                const type = pendingBumpers.shift();
+                const spec = { circle: { r: 8, v: 10 }, square: { r: 10, v: 15 }, triangle: { r: 12, v: 20 } }[type];
+                bumpers.push(new Bumper(x, y, spec.r, spec.v, type));
+                updateUI();
+            } else if (!inShop && !seed) {
+                // Choose drop position for seed
+                dropSeed(x);
             }
         });
 
-        // Show shop immediately when game starts
-        openShop();
-        draw();
+        /* ------------- Round Flow ------------- */
+        function startNextRound() {
+            if (!inShop) return;
+            inShop = false; updateUI();
+            alert('Click on the board where you want to drop the seed!');
+        }
+        function dropSeed(dropX) { score = 0; seed = new Seed(dropX ?? canvas.width / 2, 20); }
+        function endRound() {
+            money += seed.value;
+            if (score >= quota) { quota += 50; alert('Quota met!'); }
+            else { alert('Quota missed – try again!'); }
+            seed = null; inShop = true; updateUI();
+        }
+
+        /* ------------- Main Loop ------------- */
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // Draw bumpers only (no auto pegs)
+            bumpers.forEach(b => b.draw());
+            if (seed) {
+                seed.update(); seed.draw();
+                if (seed.y > canvas.height) { endRound(); }
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        /* ------------- Initialize ------------- */
+        resizeCanvas();
+        updateUI();
+        gameLoop();
     </script>
 </body>
 </html>
