@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Seed Dropper Plinko</title>
+    <style>
+        body { text-align: center; background: #eef; margin: 0; overflow: hidden; }
+        canvas { border: 1px solid black; display: block; margin: 0 auto; background: #fff; }
+        #shop { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Seed Dropper Plinko</h1>
+    <p>Use your money to buy bumpers and press "Start Round" to drop a seed.</p>
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="shop">
+        <h2>Shop</h2>
+        <p id="moneyDisplay"></p>
+        <button onclick="buyBumper()">Buy Bumper ($5)</button>
+        <button id="startRoundBtn" onclick="startNextRound()">Start Round</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        const seedRadius = 8;
+        let seed = null;
+        let bumpers = [];
+        let money = 10;
+        let inShop = true;
+        let bumpersAvailable = 0;
+
+        class Seed {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = 0;
+                this.vy = 2;
+            }
+
+            update() {
+                this.vy += 0.2;
+                this.x += this.vx;
+                this.y += this.vy;
+
+                this.handleCollisions();
+
+                if (this.x < seedRadius) { this.x = seedRadius; this.vx = Math.abs(this.vx); }
+                if (this.x > canvas.width - seedRadius) { this.x = canvas.width - seedRadius; this.vx = -Math.abs(this.vx); }
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, seedRadius, 0, Math.PI * 2);
+                ctx.fillStyle = "green";
+                ctx.fill();
+            }
+
+            handleCollisions() {
+                for (let peg of bumpers) {
+                    let dx = this.x - peg.x;
+                    let dy = this.y - peg.y;
+                    let dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < seedRadius + peg.radius) {
+                        const angle = Math.atan2(dy, dx);
+                        const bounceSpeed = 2;
+                        this.vx = bounceSpeed * Math.cos(angle);
+                        this.vy = Math.abs(this.vy) * 0.8;
+
+                        if (Math.abs(this.vx) < 1) {
+                            this.vx += (Math.random() < 0.5 ? -1 : 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        class Bumper {
+            constructor(x, y, radius) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = "blue";
+                ctx.fill();
+            }
+        }
+
+        function dropSeed() {
+            seed = new Seed(canvas.width / 2, 20);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            bumpers.forEach(b => b.draw());
+
+            if (seed) {
+                seed.update();
+                seed.draw();
+
+                if (seed.y > canvas.height) {
+                    money += 10;
+                    openShop();
+                    seed = null;
+                }
+            }
+
+            drawHUD();
+            requestAnimationFrame(draw);
+        }
+
+        function drawHUD() {
+            ctx.font = "16px Arial";
+            ctx.fillStyle = "black";
+            ctx.fillText(`Money: $${money}`, 10, 20);
+        }
+
+        function openShop() {
+            inShop = true;
+            document.getElementById("shop").style.display = "block";
+            document.getElementById("moneyDisplay").innerText = `You have $${money}`;
+        }
+
+        function startNextRound() {
+            inShop = false;
+            document.getElementById("shop").style.display = "none";
+            dropSeed();
+        }
+
+        function buyBumper() {
+            if (money >= 5) {
+                money -= 5;
+                bumpersAvailable++;
+                alert("Click on canvas to place bumper(s) before starting next round.");
+            }
+        }
+
+        canvas.addEventListener("click", (e) => {
+            if (inShop && bumpersAvailable > 0) {
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                bumpers.push(new Bumper(x, y, 8));
+                bumpersAvailable--;
+            }
+        });
+
+        // Show shop immediately when game starts
+        openShop();
+        draw();
+    </script>
+</body>
+</html>
