@@ -1,159 +1,348 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Endless Seed Dropper Plinko</title>
-    <style>
-        :root { --bar-height: 140px; }
-        body { margin:0; background:#eef; font-family:Arial, sans-serif; display:flex; flex-direction:column; height:100vh; }
-        #gameCanvas { flex:1 1 auto; border:1px solid #000; background:#fff; display:block; margin:0 auto; }
-        /* Bottom bar */
-        #bottomBar { height:var(--bar-height); background:#222; color:#fff; display:flex; flex-direction:column; padding:10px; box-sizing:border-box; }
-        #stats { font-size:14px; margin-bottom:6px; }
-        #shopControls { display:flex; gap:6px; flex-wrap:wrap; }
-        #shopControls button { padding:6px 10px; font-size:14px; cursor:pointer; border:none; border-radius:4px; }
-        #shopControls button:disabled { opacity:0.4; cursor:not-allowed; }
-        .circle { background:#8d6e63; color:#fff; }
-        .square { background:#f57c00; color:#fff; }
-        .triangle { background:#7b1fa2; color:#fff; }
-        #startRoundBtn { background:#1976d2; color:#fff; margin-left:auto; }
-    </style>
+  <meta charset="UTF-8" />
+  <title>Seed Dropper — PNG Seed Sprite</title>
+  <style>
+    :root { --bar-height: 185px; --accent:#2196f3; }
+    *,*::before,*::after{box-sizing:border-box}
+    body{margin:0;height:100vh;display:flex;flex-direction:column;font-family:"Segoe UI",Arial,sans-serif;background:#fafafa;color:#222}
+    #gameCanvas{flex:1;width:100%;background:#fff;border-bottom:2px solid var(--accent)}
+    #bottomBar{height:var(--bar-height);background:#e0e0e0;border-top:2px solid var(--accent);padding:10px 14px;display:flex;flex-direction:column;gap:8px}
+    #stats{font-size:20px;font-weight:700;line-height:1.2;color:#111;display:flex;gap:18px;flex-wrap:wrap}
+    #stats span{padding:2px 8px;border-radius:6px;background:#fff;border:1px solid rgba(0,0,0,.1)}
+    #quotaBadge{background:#ffeb3b;border-color:#fbc02d;color:#5d4037}
+    #anteBadge{background:#c8e6c9;border-color:#81c784;color:#1b5e20}
+
+    #shopControls{display:none;gap:10px;flex-wrap:wrap;align-items:center}
+    .cardBtn,.utilBtn{flex:1 1 0;padding:8px 0;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .12s}
+    .cardBtn:hover:not(.disabled),.utilBtn:hover:not(.disabled){transform:translateY(-2px)}
+    .circle{background:#a1887f;color:#fff}.square{background:#ff9800;color:#fff}.triangle{background:#9c27b0;color:#fff}
+    .slotTile{background:#673ab7;color:#fff}
+    .slotTile.common{background:#6a5acd}
+    .slotTile.rare{background:#3f51b5}
+    .slotTile.epic{background:#9c27b0}
+    .slotTile.legendary{background:#ff5722}
+    .disabled{opacity:.35;cursor:not-allowed}
+    #deleteBtn{background:#e53935;width:110px;color:#fff;display:none}
+    #startRoundBtn{background:#1976d2;width:150px;color:#fff}
+    #pendingDisplay{font-size:13px;opacity:.8;display:none}
+    #message{font-size:14px;color:#d32f2f;height:18px}
+    #seedLoader{font-size:12px;opacity:.8}
+  </style>
 </head>
 <body>
-    <canvas id="gameCanvas"></canvas>
-
-    <!-- Bottom UI Bar -->
-    <div id="bottomBar">
-        <div id="stats"></div>
-        <div id="shopControls">
-            <button id="buyCircle" class="circle" onclick="buyBumper('circle')">Circle ($5)</button>
-            <button id="buySquare" class="square" onclick="buyBumper('square')">Square ($7)</button>
-            <button id="buyTriangle" class="triangle" onclick="buyBumper('triangle')">Triangle ($10)</button>
-            <button id="startRoundBtn" onclick="startNextRound()">Start Round</button>
-        </div>
-        <div id="pendingDisplay" style="margin-top:6px;font-size:12px;"></div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="bottomBar">
+    <div id="stats"></div>
+    <div id="shopControls">
+      <button id="card0" class="cardBtn"></button>
+      <button id="card1" class="cardBtn"></button>
+      <button id="card2" class="cardBtn"></button>
     </div>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button id="deleteBtn" class="utilBtn" onclick="toggleDelete()">Delete ✂️</button>
+      <button id="startRoundBtn" class="utilBtn" onclick="startNextRound()">Start ▶</button>
+      <label id="seedLoader">Seed PNG: <input type="file" id="seedInput" accept="image/png,image/webp,image/jpeg" /></label>
+    </div>
+    <div id="pendingDisplay"></div>
+    <div id="message"></div>
+  </div>
 
-    <script>
-        /* ------------ Canvas & Global Data ------------- */
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
+<script>
+/******** CONSTANTS ********/ 
+const canvas = document.getElementById('gameCanvas');
+const ctx    = canvas.getContext('2d');
+const DROP_HEIGHT   = 90;
+const SEED_R        = 14;             // radius only for collision; sprite scaled to 2R
+const BUY_LIMIT     = 3;
+const STILL_LIMIT   = 60;
+const ROUND_MS      = 20_000;
+const SLOT_COUNT    = 12;
+const SLOT_BAR_H    = 26;
+const MIN_BUMPER_SPACING = 30;
+const HANDS_PER_ANTE = 4;
 
-        const seedRadius = 8;
-        let bumpers = [], pendingBumpers = [];
-        let seed = null;
-        let money = 10, score = 0, quota = 100;
-        let inShop = true;
-        let stock = { circle: 5, square: 3, triangle: 2 };
+// Slots start at 1× and tiles multiply
+let SLOT_MULT = Array(SLOT_COUNT).fill(1);
 
-        /* ------------ Canvas Resize ------------- */
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight - parseInt(getComputedStyle(document.documentElement).getPropertyValue('--bar-height'));
+/******** SHOP POOLS ********/
+const BUMPER_POOL = [
+  {kind:'bumper', id:'circle',   t:'circle',  r:8 ,v:2 ,c:5 ,  color:'#a1887f', name:'Circle Bumper'},
+  {kind:'bumper', id:'square',   t:'square',  r:10,v:4 ,c:7 ,  color:'#ff9800', name:'Square Bumper'},
+  {kind:'bumper', id:'triangle', t:'triangle',r:12,v:5 ,c:10, color:'#9c27b0', name:'Triangle Bumper'}
+];
+const SLOT_TILE_POOL = [
+  { kind:'slot', id:'tile125', mult:1.25, c:6,  name:'1.25× Tile', rarity:'common' },
+  { kind:'slot', id:'tile150', mult:1.5,  c:9,  name:'1.5× Tile',  rarity:'rare' },
+  { kind:'slot', id:'tile200', mult:2.0,  c:14, name:'2× Tile',    rarity:'epic' },
+  { kind:'slot', id:'tile300', mult:3.0,  c:22, name:'3× Tile',    rarity:'legendary' }
+];
+const RARITY_WEIGHTS = { common: 60, rare: 25, epic: 12, legendary: 3 };
+
+/******** STATE ********/ 
+let offers=[], pending=[], bumpers=[];
+let money=25, score=0, quota=10;
+let bought=0;                        // bumpers bought this round
+let boughtThisCycle = Object.create(null);
+let seed=null, inShop=true, deleteMode=false, previewX=null;
+let roundStart=0; let flashGain={value:0,time:0};
+let ante=1, hand=1, lost=false;
+let firstDeal=true;                 // (kept if you still want guaranteed start)
+let bumperPreview=null;             // ghost placement
+
+// Seed sprite
+let seedImg = new Image();
+let seedImgLoaded = false;
+seedImg.onload = ()=>{ seedImgLoaded = true; };
+// optional: default placeholder (a tiny base64 green circle). Replace if you want none.
+seedImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAMAAAAoLQ9TAAAARVBMVEUAAACAgICBgYGCgoKDg4OEhISFhYWGhoaHh4eIiIiJiYmKioqLi4uMjIyOjo6Pj4+QkJCSkpKTk5OUlJSVlZWWlpaar9N/AAAADXRSTlMAECAwQFBgcICQoK/P0GQAAABGSURBVBjTY2AgDlYGJmZmBiZGBgYGLgYGBgY+BgoGNgZGBgYFhY2BiYGBgYGB4eBiYmJhYGAQCQwMDAwPDw8DAwMAACgYBn9y4kQyAAAAAElFTkSuQmCC';
+
+/******** UTILITIES ********/ 
+function pickWeightedCard(){
+  const arr=[]; BUMPER_POOL.forEach(b=>arr.push({card:b,w:40}));
+  SLOT_TILE_POOL.forEach(t=>arr.push({card:t,w:RARITY_WEIGHTS[t.rarity]||1}));
+  const total=arr.reduce((s,o)=>s+o.w,0); let r=Math.random()*total;
+  for(const o of arr){ if((r-=o.w)<=0) return structuredClone(o.card);} return structuredClone(arr[0].card);
+}
+function cardKey(c){ return c.kind+":"+(c.id||c.name); }
+function setMessage(txt,color="#d32f2f"){ const m=document.getElementById('message'); m.style.color=color; m.textContent=txt; }
+
+/******** CANVAS SIZE ********/ 
+function resize(){
+  canvas.width  = innerWidth;
+  canvas.height = innerHeight - parseInt(getComputedStyle(document.documentElement).getPropertyValue('--bar-height'));
+}
+window.addEventListener('resize',resize);resize();
+
+/******** CLASSES ********/ 
+class Seed{
+  constructor(x){this.x=x;this.y=SEED_R+4;this.vx=0;this.vy=2;this.value=0;this.still=0;this.lastHit=null;}
+  update(){
+    this.vy+=0.35; this.x+=this.vx; this.y+=this.vy;
+    if(this.x<SEED_R){this.x=SEED_R;this.vx=Math.abs(this.vx)*0.7;}
+    if(this.x>canvas.width-SEED_R){this.x=canvas.width-SEED_R;this.vx=-Math.abs(this.vx)*0.7;}
+    if(Math.abs(this.vx)<0.05) this.vx+=(Math.random()<0.5?-1:1)*0.15;
+    this.collide();
+    const sp=Math.hypot(this.vx,this.vy);
+    this.still=(this.y>DROP_HEIGHT&&sp<0.12)?this.still+1:0;
+  }
+  collide(){
+    for(const b of bumpers){
+      const dx=this.x-b.x,dy=this.y-b.y,d=Math.hypot(dx,dy);
+      if(d<SEED_R+b.radius){
+        const nx=dx/d,ny=dy/d,ov=SEED_R+b.radius-d+0.5;
+        this.x+=nx*ov; this.y+=ny*ov;
+        const dot=this.vx*nx+this.vy*ny;
+        this.vx=(this.vx-2*dot*nx)*0.7; this.vy=(this.vy-2*dot*ny)*0.7;
+        if(b!==this.lastHit){
+          score+=b.value; this.value+=b.value;
+          flashGain={value:b.value,time:performance.now()};
+          this.lastHit=b;
         }
-        window.addEventListener('resize', resizeCanvas);
+      }
+    }
+    if(this.lastHit && Math.hypot(this.x-this.lastHit.x,this.y-this.lastHit.y)>SEED_R+this.lastHit.radius){ this.lastHit=null; }
+  }
+  draw(){
+    if(seedImgLoaded){
+      const size = SEED_R*2;
+      ctx.drawImage(seedImg, this.x-SEED_R, this.y-SEED_R, size, size);
+    }else{
+      ctx.beginPath(); ctx.arc(this.x,this.y,SEED_R,0,Math.PI*2); ctx.fillStyle='#4caf50'; ctx.fill();
+    }
+  }
+}
+class Bumper{
+  constructor(x,y,card){this.x=x;this.y=y;this.t=card.t;this.radius=card.r;this.value=card.v;this.color=card.color;}
+  draw(){ctx.save();ctx.translate(this.x,this.y);ctx.fillStyle=this.color;if(this.t==='circle'){ctx.beginPath();ctx.arc(0,0,this.radius,0,Math.PI*2);ctx.fill();}else if(this.t==='square'){ctx.fillRect(-this.radius,-this.radius,this.radius*2,this.radius*2);}else{ctx.beginPath();ctx.moveTo(0,-this.radius);ctx.lineTo(this.radius,this.radius);ctx.lineTo(-this.radius,this.radius);ctx.closePath();ctx.fill();}ctx.restore();}
+}
 
-        /* ------------- Classes --------------- */
-        class Seed {
-            constructor(x, y) { this.x = x; this.y = y; this.vx = 0; this.vy = 2; this.value = 0; }
-            update() {
-                this.vy += 0.2; this.x += this.vx; this.y += this.vy;
-                this.handleCollisions(bumpers);
-                if (this.x < seedRadius) { this.x = seedRadius; this.vx = Math.abs(this.vx); }
-                if (this.x > canvas.width - seedRadius) { this.x = canvas.width - seedRadius; this.vx = -Math.abs(this.vx); }
-            }
-            draw() { ctx.beginPath(); ctx.arc(this.x, this.y, seedRadius, 0, Math.PI * 2); ctx.fillStyle = 'green'; ctx.fill(); }
-            handleCollisions(list) {
-                for (let b of list) {
-                    let dx = this.x - b.x, dy = this.y - b.y;
-                    let d = Math.hypot(dx, dy);
-                    if (d < seedRadius + b.radius) {
-                        let nx = dx / d, ny = dy / d;
-                        let dot = this.vx * nx + this.vy * ny;
-                        this.vx = (this.vx - 2 * dot * nx) * 0.8;
-                        this.vy = (this.vy - 2 * dot * ny) * 0.8;
-                        score += b.value; this.value += b.value;
-                    }
-                }
-            }
-        }
-        class Bumper {
-            constructor(x, y, r, v, t) { this.x = x; this.y = y; this.radius = r; this.value = v; this.type = t; }
-            draw() {
-                ctx.save(); ctx.translate(this.x, this.y);
-                if (this.type === 'circle') { ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fillStyle = '#8d6e63'; ctx.fill(); }
-                else if (this.type === 'square') { ctx.fillStyle = '#f57c00'; ctx.fillRect(-this.radius, -this.radius, this.radius * 2, this.radius * 2); }
-                else { ctx.fillStyle = '#7b1fa2'; ctx.beginPath(); ctx.moveTo(0, -this.radius); ctx.lineTo(this.radius, this.radius); ctx.lineTo(-this.radius, this.radius); ctx.closePath(); ctx.fill(); }
-                ctx.restore();
-            }
-        }
+/******** SHOP ********/ 
+function dealCards(){
+  if(firstDeal){
+    offers=[structuredClone(BUMPER_POOL[0]),structuredClone(BUMPER_POOL[1]),structuredClone(BUMPER_POOL[2])];
+    firstDeal=false;
+  }else{
+    offers=Array.from({length:3},()=>pickWeightedCard());
+  }
+  bought=0; boughtThisCycle=Object.create(null); updateUI();
+}
 
-        /* ------------- UI Helpers ------------- */
-        function updateUI() {
-            document.getElementById('stats').innerText = `Money: $${money}   Score: ${score}   Quota: ${quota}`;
-            document.getElementById('pendingDisplay').innerText = `Pending placement: ${pendingBumpers.join(', ') || 'None'}`;
-            ['Circle', 'Square', 'Triangle'].forEach(t => {
-                document.getElementById('buy' + t).disabled = stock[t.toLowerCase()] === 0 || !inShop;
-            });
-            document.getElementById('startRoundBtn').disabled = !inShop;
-        }
+function buy(idx){
+  if(!inShop || lost) return;
+  const card=offers[idx]; const key=cardKey(card);
+  if(boughtThisCycle[key]) return;
+  if(card.kind==='bumper' && bought>=BUY_LIMIT) return;
+  if(money<card.c) return;
+  money-=card.c; boughtThisCycle[key]=true; pending.push(card); if(card.kind==='bumper') bought++; updateUI();
+}
 
-        /* ------------- Shop Logic ------------- */
-        function buyBumper(type) {
-            if (!inShop) return;
-            const cost = { circle: 5, square: 7, triangle: 10 }[type];
-            if (money >= cost && stock[type] > 0) {
-                money -= cost; stock[type]--; pendingBumpers.push(type); updateUI();
-            }
-        }
+function toggleDelete(){ if(!inShop) return; deleteMode=!deleteMode; updateUI(); }
 
-        /* ------------- Canvas Click ------------- */
-        canvas.addEventListener('click', e => {
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left, y = e.clientY - rect.top;
+/******** UI ********/ 
+function updateUI(){
+  const shopDiv=document.getElementById('shopControls');
+  const pendDiv=document.getElementById('pendingDisplay');
+  const delBtn=document.getElementById('deleteBtn');
 
-            if (inShop && pendingBumpers.length) {
-                // Place purchased bumper
-                const type = pendingBumpers.shift();
-                const spec = { circle: { r: 8, v: 10 }, square: { r: 10, v: 15 }, triangle: { r: 12, v: 20 } }[type];
-                bumpers.push(new Bumper(x, y, spec.r, spec.v, type));
-                updateUI();
-            } else if (!inShop && !seed) {
-                // Choose drop position for seed
-                dropSeed(x);
-            }
-        });
+  shopDiv.style.display=inShop?'flex':'none';
+  pendDiv.style.display=inShop?'block':'none';
+  delBtn.style.display=inShop?'block':'none';
 
-        /* ------------- Round Flow ------------- */
-        function startNextRound() {
-            if (!inShop) return;
-            inShop = false; updateUI();
-            alert('Click on the board where you want to drop the seed!');
-        }
-        function dropSeed(dropX) { score = 0; seed = new Seed(dropX ?? canvas.width / 2, 20); }
-        function endRound() {
-            money += seed.value;
-            if (score >= quota) { quota += 50; alert('Quota met!'); }
-            else { alert('Quota missed – try again!'); }
-            seed = null; inShop = true; updateUI();
-        }
+  offers.forEach((c,i)=>{
+    const btn=document.getElementById('card'+i); if(!btn) return;
+    let cls=(c.kind==='slot')?('slotTile '+(c.rarity||'common')):c.t;
+    btn.className='cardBtn '+cls;
+    const label=(c.kind==='slot')?`${c.name} (${c.rarity||'common'})`:c.t;
+    btn.textContent=`${label} $${c.c}`;
+    const key=cardKey(c);
+    btn.onclick=()=>buy(i);
+    btn.disabled=!inShop || money<c.c || boughtThisCycle[key] || (c.kind==='bumper' && bought>=BUY_LIMIT) || lost;
+  });
 
-        /* ------------- Main Loop ------------- */
-        function gameLoop() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            // Draw bumpers only (no auto pegs)
-            bumpers.forEach(b => b.draw());
-            if (seed) {
-                seed.update(); seed.draw();
-                if (seed.y > canvas.height) { endRound(); }
-            }
-            requestAnimationFrame(gameLoop);
-        }
+  delBtn.classList.toggle('disabled',!inShop||lost);
+  delBtn.textContent=deleteMode?'Delete ON':'Delete ✂️';
 
-        /* ------------- Initialize ------------- */
-        resizeCanvas();
-        updateUI();
-        gameLoop();
-    </script>
+  const sBtn=document.getElementById('startRoundBtn');
+  sBtn.disabled=!!seed || lost;
+  sBtn.textContent= seed ? 'In‑Round' : 'Start ▶';
+
+  const statsDiv=document.getElementById('stats');
+  statsDiv.innerHTML = `
+    <span id="moneyBadge">$${money}</span>
+    <span id="quotaBadge">Quota: ${quota}</span>
+    <span id="anteBadge">Ante ${ante} · Hand ${hand}/${HANDS_PER_ANTE}</span>
+    <span id="scoreBadge">Seed Value: ${score}</span>
+  `;
+
+  const pendBump=pending.filter(p=>p.kind==='bumper').length;
+  const pendSlots=pending.filter(p=>p.kind==='slot').length;
+  pendDiv.textContent=`Pending: bumpers ${pendBump}, slots ${pendSlots} | Bought ${bought}/${BUY_LIMIT}`;
+}
+
+/******** EVENTS ********/ 
+// Allow user to import a PNG
+const seedInput = document.getElementById('seedInput');
+seedInput.addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  seedImgLoaded = false;
+  seedImg = new Image();
+  seedImg.onload = ()=>{ seedImgLoaded = true; URL.revokeObjectURL(url); };
+  seedImg.src = url;
+});
+
+canvas.addEventListener('mousemove',e=>{
+  const r=canvas.getBoundingClientRect(); const x=e.clientX-r.left, y=e.clientY-r.top;
+  previewX = (!inShop && !seed && y<=DROP_HEIGHT) ? x : null;
+  bumperPreview = null;
+  if(inShop && pending.length && pending[0].kind==='bumper'){
+    const card=pending[0];
+    if(y>=DROP_HEIGHT+SEED_R){
+      let ok=true; for(const b of bumpers){ if(Math.hypot(x-b.x,y-b.y) < (b.radius+card.r+MIN_BUMPER_SPACING)){ok=false;break;} }
+      if(ok) bumperPreview={x,y,card};
+    }
+  }
+});
+
+canvas.addEventListener('click',e=>{
+  const r=canvas.getBoundingClientRect(); const x=e.clientX-r.left, y=e.clientY-r.top; if(lost) return;
+  if(inShop){
+    if(deleteMode){ for(let i=bumpers.length-1;i>=0;i--){ if(Math.hypot(x-bumpers[i].x,y-bumpers[i].y)<=bumpers[i].radius+5){ bumpers.splice(i,1); break; } } return; }
+    if(pending.length){ const card=pending[0];
+      if(card.kind==='bumper'){
+        if(!bumperPreview){ alert('Invalid spot'); return; }
+        bumpers.push(new Bumper(bumperPreview.x,bumperPreview.y,pending.shift())); bumperPreview=null;
+      }else if(card.kind==='slot'){
+        const slotYTop=canvas.height-SLOT_BAR_H; if(y<slotYTop){ alert('Click on the slot bar to place tile'); return; }
+        const slotW=canvas.width/SLOT_COUNT; const idx=Math.min(SLOT_COUNT-1,Math.max(0,Math.floor(x/slotW)));
+        SLOT_MULT[idx]=+(SLOT_MULT[idx]*card.mult).toFixed(2); pending.shift(); flashGain={value:0,time:performance.now()};
+      }
+      updateUI();
+    }
+  }else if(!seed){
+    if(y>DROP_HEIGHT){ alert('Click within drop zone'); return; }
+    seed=new Seed(x); roundStart=performance.now(); previewX=null; setMessage(''); updateUI();
+  }
+});
+
+/******** ROUND / ANTE CONTROL ********/ 
+function startNextRound(){
+  if(seed || lost) return;
+  if(inShop){ inShop=false; deleteMode=false; setMessage('Click in blue zone to drop the seed', '#1976d2'); updateUI(); }
+}
+
+function scaleQuota(){
+  // Reduced scaling: gentle early, still ramps later
+  const BASE = 10;                      // starting quota already 10
+  const anteGrowth = Math.pow(1.12, ante-1); // 12% per ante
+  const handGrowth = 1 + 0.05*(hand-1);      // 5% per hand
+  quota = Math.round(BASE * anteGrowth * handGrowth);
+}
+
+function endRound(){
+  if(seed){
+    const slotW = canvas.width / SLOT_COUNT;
+    const idx   = Math.min(SLOT_COUNT-1, Math.max(0, Math.floor(seed.x/slotW)));
+    const final = Math.round(seed.value * SLOT_MULT[idx]);
+    money += final; flashGain = {value:final,time:performance.now()};
+  }
+  seed=null; inShop=true; pending.length=0; score=0;
+
+  if(money < quota){
+    lost = true; setMessage('You lost! Not enough money to meet quota. Refresh to restart.', '#d32f2f'); updateUI(); return;
+  }
+
+  hand++; if(hand>HANDS_PER_ANTE){ ante++; hand=1; bumpers.length=0; setMessage(`Ante ${ante-1} complete! Bumpers cleared.`, '#2e7d32'); }
+
+  scaleQuota();
+  dealCards();
+  updateUI();
+}
+
+/******** RENDER LOOP ********/ 
+function render(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // Drop zone
+  ctx.fillStyle='rgba(33,150,243,0.15)'; ctx.fillRect(0,0,canvas.width,DROP_HEIGHT);
+  ctx.strokeStyle='rgba(33,150,243,0.5)'; ctx.strokeRect(0,0,canvas.width,DROP_HEIGHT);
+
+  // Slots bar
+  const slotW = canvas.width / SLOT_COUNT; const slotTop = canvas.height - SLOT_BAR_H;
+  ctx.fillStyle='rgba(0,0,0,0.05)'; ctx.fillRect(0, slotTop, canvas.width, SLOT_BAR_H);
+  ctx.strokeStyle='rgba(0,0,0,0.2)';
+  for(let i=1;i<SLOT_COUNT;i++){ ctx.beginPath(); ctx.moveTo(slotW*i,canvas.height); ctx.lineTo(slotW*i,slotTop); ctx.stroke(); }
+  ctx.font='12px Segoe UI'; ctx.fillStyle='#444';
+  for(let i=0;i<SLOT_COUNT;i++){ ctx.fillText(`${SLOT_MULT[i]}×`, slotW*i + slotW/2 - 12, canvas.height-8); }
+
+  // Seed drop preview line
+  if(previewX!==null){ ctx.setLineDash([4,4]); ctx.strokeStyle='rgba(0,0,0,0.5)'; ctx.beginPath(); ctx.moveTo(previewX,0); ctx.lineTo(previewX,canvas.height); ctx.stroke(); ctx.setLineDash([]); ctx.beginPath(); ctx.arc(previewX, SEED_R+4, SEED_R, 0, Math.PI*2); ctx.fillStyle='rgba(76,175,80,0.45)'; ctx.fill(); }
+
+  // Bumper ghost preview
+  if(bumperPreview){ ctx.save(); ctx.globalAlpha=0.35; ctx.fillStyle=bumperPreview.card.color; ctx.translate(bumperPreview.x,bumperPreview.y); const r=bumperPreview.card.r; const t=bumperPreview.card.t; if(t==='circle'){ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();}else if(t==='square'){ctx.fillRect(-r,-r,r*2,r*2);}else{ctx.beginPath();ctx.moveTo(0,-r);ctx.lineTo(r,r);ctx.lineTo(-r,r);ctx.closePath();ctx.fill();} ctx.restore(); }
+
+  // Draw bumpers & seed
+  bumpers.forEach(b=>b.draw());
+  if(seed){
+    seed.update(); seed.draw();
+    const elapsed=performance.now()-roundStart; const pct=Math.max(0,1-elapsed/ROUND_MS);
+    ctx.fillStyle='rgba(255,0,0,0.35)'; ctx.fillRect(0,canvas.height-6,canvas.width*pct,6);
+    if(elapsed>ROUND_MS || seed.y>canvas.height || seed.still>STILL_LIMIT) endRound();
+  }
+
+  if(performance.now()-flashGain.time<1000){ ctx.font='20px Segoe UI'; ctx.fillStyle='#2e7d32'; ctx.fillText(`+$${flashGain.value}`,10,30); }
+
+  requestAnimationFrame(render);
+}
+
+/******** INIT ********/ 
+scaleQuota();
+dealCards();
+updateUI();
+render();
+</script>
 </body>
 </html>
