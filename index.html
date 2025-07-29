@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Seed Dropper — Circular Bumper Edition</title>
+<title>Seed Dropper — Self-Contained</title>
 <style>
 :root { --bar-h: 190px; --accent:#2196f3; }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -13,17 +13,14 @@ body{height:100vh;display:flex;flex-direction:column;font-family:Segoe UI,Arial,
 #shop{display:none;gap:10px;flex-wrap:wrap;align-items:center}
 .btn{flex:1 1 0;padding:8px 0;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .12s}
 .btn:hover:not(.disabled){transform:translateY(-2px)}
-.circle-btn{background:#1e88e5;color:#fff}
-.slow-btn{background:#43a047;color:#fff}
-.bonus-btn{background:#fdd835;color:#fff;color:#000}
+.speed{background:#1e88e5;color:#fff}
+.slow{background:#43a047;color:#fff}
+.bonus{background:#fdd835;color:#000}
 .slotTile{background:#673ab7;color:#fff}.common{background:#6a5acd}.rare{background:#3f51b5}.epic{background:#9c27b0}.legendary{background:#ff5722}
 .disabled{opacity:.35;cursor:not-allowed}
 #del {background:#e53935;width:100px;color:#fff;display:none}
 #go  {background:#1976d2;width:110px;color:#fff}
 #pending{font-size:13px;opacity:.8;display:none}
-.spriteBox{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px}
-.spriteBox input{width:260px;padding:2px 4px}
-.gone{display:none!important}
 #msg {height:18px;color:#d32f2f}
 </style>
 </head>
@@ -40,103 +37,102 @@ body{height:100vh;display:flex;flex-direction:column;font-family:Segoe UI,Arial,
     <button id="del" class="btn" onclick="toggleDelete()">Delete ✂️</button>
     <button id="go"  class="btn" onclick="startNextRound()">Start ▶</button>
   </div>
-  <div class="spriteBox">
-    <label>Seed PNG <input id="seedURL" placeholder="raw.githubusercontent.com/...seed.png"></label>
-    <label>Circle PNG <input id="circURL" placeholder="raw.githubusercontent.com/...circle.png"></label>
-    <button class="btn" style="flex:0 0 120px" onclick="loadSprites()">Load Sprites</button>
-  </div>
   <div id="pending"></div>
   <div id="msg"></div>
 </div>
 <script>
-const $=id=>document.getElementById(id);
-function rawify(url){return url.replace(/^https:\/\/github\\.com\\//,'https://raw.githubusercontent.com/').replace(/\\/blob\\//,'/');}
-function shout(t,c='#d32f2f'){const m=$('msg'); m.textContent=t; m.style.color=c;}
+const cvs = document.getElementById('game');
+const ctx = cvs.getContext('2d');
+const R = 8, BUY = 3, STILL = 60, ROUND = 20000, SLOTS = 12, BAR = 26, SPC = 30, HANDPER = 4;
+const DH = 90;
 
-const cvs=$('game'), ctx=cvs.getContext('2d');
-const DH=90, R=8, BUY=3, STILL=60, ROUND=20000, SLOTS=12, BAR=26, SPC=30, HANDPER=4;
-let slotMul=Array(SLOTS).fill(1);
+let slotMul = Array(SLOTS).fill(1);
+let offers = [], pending = [], bumps = [];
+let money = 25, score = 0, quota = 10, bought = 0, boughtC = {}, seed = null;
+let inShop = true, delMode = false, preX = null, start = 0;
+let flash = { v: 0, t: 0 }, ante = 1, hand = 1, lost = false;
 
-// sprites
-const seedImg=new Image(), circImg=new Image();
-let seedOk=false, circOk=false;
-function setSprite(img, url){ if(!url) return; img.crossOrigin='anonymous'; img.onload=()=>{
-    if(img===seedImg) seedOk=true; else circOk=true;
-}; img.src = rawify(url); }
-function loadSprites(){
-  seedOk = circOk = false;
-  setSprite(seedImg, $('seedURL').value.trim());
-  setSprite(circImg, $('circURL').value.trim());
-}
+/*** Sprites ***/
+const seedImg = new Image();
+seedImg.src = 'data:image/png;base64,...'; // paste your base64 seed PNG here
+const circImg = new Image();
+circImg.src = 'data:image/png;base64,...'; // paste your base64 circle bumper PNG here
+let seedOk = true, circOk = true;
 
-// cards
-const bumpers=[ // all circular
-  { k:'b', id:'speed', effect:'speed', r:12, v:3, c:6, col:'#1e88e5', n:'Speed Boost' },
-  { k:'b', id:'slow',   effect:'slow',  r:12, v:4, c:7, col:'#43a047', n:'Slow Down' },
-  { k:'b', id:'bonus',  effect:'bonus', r:12, v:6, c:9, col:'#fdd835', n:'Bonus Points' }
+/*** Bumper Definitions ***/
+const bumpers = [
+  { k: 'b', id: 'speed', effect: 'speed', r: 12, v: 3, c: 6, col: '#1e88e5', n: 'Speed Boost' },
+  { k: 'b', id: 'slow', effect: 'slow', r: 12, v: 4, c: 7, col: '#43a047', n: 'Slow Down' },
+  { k: 'b', id: 'bonus', effect: 'bonus', r: 12, v: 6, c: 9, col: '#fdd835', n: 'Bonus Points' }
 ];
-const tiles=[{k:'s',id:'t125',m:1.25,c:6,n:'1.25×',rar:'common'},{k:'s',id:'t150',m:1.5,c:9,n:'1.5×',rar:'rare'},{k:'s',id:'t200',m:2,c:14,n:'2×',rar:'epic'},{k:'s',id:'t300',m:3,c:22,n:'3×',rar:'legendary'}];
-const RAR={common:60,rare:25,epic:12,legendary:3};
 
-function pick(){const arr=[]; bumpers.forEach(b=>arr.push({c:b,w:40})); tiles.forEach(t=>arr.push({c:t,w:RAR[t.rarity]||1})); let tot=arr.reduce((s,o)=>s+o.w,0), r=Math.random()*tot;
-  for(const o of arr) if((r-=o.w)<=0) return structuredClone(o.c);
+const tiles = [
+  { k: 's', id: 't125', m: 1.25, c: 6, n: '1.25×', rar: 'common' },
+  { k: 's', id: 't150', m: 1.5, c: 9, n: '1.5×', rar: 'rare' },
+  { k: 's', id: 't200', m: 2.0, c: 14, n: '2×', rar: 'epic' },
+  { k: 's', id: 't300', m: 3.0, c: 22, n: '3×', rar: 'legendary' }
+];
+
+const RAR = { common: 60, rare: 25, epic: 12, legendary: 3 };
+const key = c => c.k + ':' + c.id;
+
+function pick() {
+  const arr = [];
+  bumpers.forEach(b => arr.push({ c: b, w: 40 }));
+  tiles.forEach(t => arr.push({ c: t, w: RAR[t.rar] || 1 }));
+  let tot = arr.reduce((s, o) => s + o.w, 0), r = Math.random() * tot;
+  for (const o of arr) if ((r -= o.w) <= 0) return structuredClone(o.c);
   return structuredClone(arr[0].c);
 }
-function key(card){return card.k+':'+card.id}
-
-// state
-let offers=[], pending=[], bumps=[];
-let money=25, score=0, quota=10, bought=0, boughtC={}, seed=null, inShop=true, delMode=false, preX=null;
-let start=0, flash={v:0,t:0}, ante=1, hand=1, lost=false;
-
-function fit(){cvs.width=innerWidth; cvs.height=innerHeight-parseInt(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')); }
-addEventListener('resize', fit); fit();
 
 class Seed {
-  constructor(x){ this.x=x; this.y=R+4; this.vx=0; this.vy=2; this.val=0; this.still=0; this.last=null; }
-  upd(){
-    this.vy+=0.35; this.x+=this.vx; this.y+=this.vy;
-    if(this.x<R){ this.x=R; this.vx=Math.abs(this.vx)*0.7; }
-    if(this.x>cvs.width-R){ this.x=cvs.width-R; this.vx=-Math.abs(this.vx)*0.7; }
-    if(Math.abs(this.vx)<0.05) this.vx+=(Math.random()<.5?-1:1)*0.15;
-
-    this.col();
-    const s=Math.hypot(this.vx,this.vy);
-    this.still=(this.y>DH && s<.12)? this.still+1 : 0;
+  constructor(x) {
+    this.x = x; this.y = R + 4;
+    this.vx = 0; this.vy = 2;
+    this.val = 0; this.still = 0;
+    this.last = null;
   }
 
-  col(){
-    for(const b of bumps){
-      const dx=this.x-b.x, dy=this.y-b.y, d=Math.hypot(dx,dy);
-      if(d<R+b.r){
-        const nx=dx/d, ny=dy/d, ov=R+b.r-d+0.5;
-        this.x+=nx*ov; this.y+=ny*ov;
-        const dot=this.vx*nx + this.vy*ny;
-        this.vx=(this.vx-2*dot*nx)*0.7;
-        this.vy=(this.vy-2*dot*ny)*0.7;
+  upd() {
+    this.vy += 0.35;
+    this.x += this.vx;
+    this.y += this.vy;
+    if (this.x < R) { this.x = R; this.vx = Math.abs(this.vx) * 0.7; }
+    if (this.x > cvs.width - R) { this.x = cvs.width - R; this.vx = -Math.abs(this.vx) * 0.7; }
+    if (Math.abs(this.vx) < 0.05) this.vx += (Math.random() < 0.5 ? -1 : 1) * 0.15;
+    this.col();
+    const s = Math.hypot(this.vx, this.vy);
+    this.still = (this.y > DH && s < 0.12) ? this.still + 1 : 0;
+  }
 
-        if(b!==this.last){
-          score += b.v;
-          this.val += b.v;
-          // apply effect
-          if(b.effect==='speed'){ this.vx *=1.2; this.vy*=1.2 }
-          if(b.effect==='slow'){ this.vx *=0.8; this.vy*=0.8 }
-          if(b.effect==='bonus'){ score+=5; this.val+=5 }
-
-          flash={v:b.v + (b.effect==='bonus'?5:0), t:performance.now()};
-          this.last=b;
+  col() {
+    for (const b of bumps) {
+      const dx = this.x - b.x, dy = this.y - b.y, d = Math.hypot(dx, dy);
+      if (d < R + b.r) {
+        const nx = dx / d, ny = dy / d, ov = R + b.r - d + 0.5;
+        this.x += nx * ov; this.y += ny * ov;
+        const dot = this.vx * nx + this.vy * ny;
+        this.vx = (this.vx - 2 * dot * nx) * 0.7;
+        this.vy = (this.vy - 2 * dot * ny) * 0.7;
+        if (b !== this.last) {
+          score += b.v; this.val += b.v;
+          if (b.effect === 'speed') { this.vx *= 1.2; this.vy *= 1.2; }
+          if (b.effect === 'slow') { this.vx *= 0.8; this.vy *= 0.8; }
+          if (b.effect === 'bonus') { score += 5; this.val += 5; }
+          flash = { v: b.v + (b.effect === 'bonus' ? 5 : 0), t: performance.now() };
+          this.last = b;
         }
       }
     }
-    if(this.last && Math.hypot(this.x-this.last.x,this.y-this.last.y) > R+this.last.r) this.last = null;
+    if (this.last && Math.hypot(this.x - this.last.x, this.y - this.last.y) > R + this.last.r) this.last = null;
   }
 
-  draw(){
-    if(seedOk){
-      ctx.drawImage(seedImg, this.x-R, this.y-R, R*2, R*2);
+  draw() {
+    if (seedOk) {
+      ctx.drawImage(seedImg, this.x - R, this.y - R, R * 2, R * 2);
     } else {
       ctx.beginPath();
-      ctx.arc(this.x,this.y,R,0,Math.PI*2);
+      ctx.arc(this.x, this.y, R, 0, Math.PI * 2);
       ctx.fillStyle = '#4caf50';
       ctx.fill();
     }
@@ -144,150 +140,91 @@ class Seed {
 }
 
 class Bump {
-  constructor(x,y,c){ Object.assign(this,{x, y, r:c.r, v:c.v, effect:c.effect, col:c.col}); }
-  draw(){
-    ctx.save(); ctx.translate(this.x,this.y);
-    if(circOk){
-      ctx.drawImage(circImg, -this.r, -this.r, this.r*2, this.r*2);
+  constructor(x, y, c) {
+    Object.assign(this, { x, y, r: c.r, v: c.v, effect: c.effect, col: c.col });
+  }
+
+  draw() {
+    ctx.save(); ctx.translate(this.x, this.y);
+    if (circOk) {
+      ctx.drawImage(circImg, -this.r, -this.r, this.r * 2, this.r * 2);
     } else {
       ctx.fillStyle = this.col;
       ctx.beginPath();
-      ctx.arc(0,0,this.r,0,Math.PI*2);
+      ctx.arc(0, 0, this.r, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
   }
 }
 
-// … (shop, UI, events, rendering logic remains largely unchanged – integrated sprite capability)
-
-function deal(){ offers=Array.from({length:3},pick); bought=0; boughtC={}; ui(); }
-function buy(i){ if(!inShop||lost) return; const c=offers[i]; if(!c) return; const k=key(c);
-  if(boughtC[k]) return; if(c.k==='b' && bought>=BUY) return; if(money<c.c) return;
-  money -= c.c; boughtC[k]=true; pending.push(c); if(c.k==='b') bought++;
-  offers = offers.map(o=> o && key(o)===k ? null : o ); ui();
-}
-function toggleDelete(){ if(inShop) delMode=!delMode; ui(); }
-
-function ui(){
-  $('shop').style.display = inShop ? 'flex' : 'none';
-  $('pending').style.display = inShop ? 'block' : 'none';
-  $('del').style.display = inShop ? 'block' : 'none';
-  ['c0','c1','c2'].forEach((id,i)=>{
-    const btn=$(id), c=offers[i];
-    if(!c){ btn.className='btn gone'; btn.textContent=''; btn.onclick=null; return; }
-    const lab = c.k==='s' ? `${c.n} (${c.rar})` : c.n;
-    btn.className='btn ' + (c.k==='b' ? (c.id+'-btn') : ('slotTile '+c.rar));
-    btn.textContent = `${lab} $${c.c}`;
-    btn.onclick = () => buy(i);
-    btn.disabled = !inShop || money<c.c || boughtC[key(c)] || (c.k==='b' && bought>=BUY) || lost;
-  });
-  $('del').classList.toggle('disabled',!inShop || lost);
-  $('del').textContent = delMode ? 'Delete ON' : 'Delete ✂️';
-  $('go').disabled = !!seed || lost;
-  $('go').textContent = seed ? 'In‑Round' : 'Start ▶';
-  $('stats').textContent = `Money $${money} | Seed ${score} | Quota ${quota} | Ante ${ante} | Hand ${hand}/${HANDPER}`;
-  const pb = pending.filter(p=>p.k==='b').length, ps = pending.filter(p=>p.k==='s').length;
-  $('pending').textContent = `Pending: bumpers ${pb}, tiles ${ps} | Bought ${bought}/${BUY}`;
+function startNextRound() {
+  if (seed || lost) return;
+  if (inShop) { inShop = false; delMode = false; ui(); }
 }
 
-$('game').addEventListener('mousemove', e=>{
-  const r=cvs.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
-  preX = (!inShop && !seed && y<=DH) ? x : null;
-});
-$('game').addEventListener('click', e=>{
-  const r=cvs.getBoundingClientRect(), x=e.clientX-r.left, y=e.clientY-r.top;
-  if(lost) return;
-  if(inShop){
-    if(delMode){
-      for(let i=bumps.length-1;i>=0;i--){
-        if(Math.hypot(x-bumps[i].x, y-bumps[i].y)<=bumps[i].r+4){
-          bumps.splice(i,1); break;
-        }
-      }
-      ui();
-      return;
-    }
-    if(!pending.length) return;
-    const card = pending[0];
-    if(card.k==='b'){
-      if(y<DH+R){ alert('Place below drop zone'); return; }
-      for(const b of bumps){ if(Math.hypot(x-b.x,y-b.y)<b.r+card.r+SPC){ alert('Too close'); return; } }
-      bumps.push(new Bump(x,y,card)); pending.shift();
-    } else {
-      const top=cvs.height-BAR;
-      if(y<top){ alert('Click slot bar'); return; }
-      const w=cvs.width/SLOTS, idx = Math.floor(x/w);
-      slotMul[idx] = +(slotMul[idx]*card.m).toFixed(2);
-      pending.shift();
-    }
-    ui();
-  } else if(!seed){
-    if(y>DH){ alert('Drop in blue zone'); return; }
-    seed = new Seed(x); start = performance.now(); preX = null; shout('','');
-    ui();
-  }
-});
-
-function startNextRound(){
-  if(seed||lost) return;
-  if(inShop){ inShop=false; delMode=false; shout('Click in blue zone to drop the seed','#1976d2'); ui(); }
+function nextQuota() {
+  quota = Math.round(10 * Math.pow(1.12, ante - 1) * (1 + 0.06 * (hand - 1)));
 }
-function nextQuota(){ quota = Math.round(10 * Math.pow(1.12,ante-1) * (1 + 0.06*(hand-1))); }
-function end(){
-  if(seed){
-    const w=cvs.width/SLOTS, idx=Math.floor(seed.x/w);
-    const gain=Math.round(seed.val * slotMul[idx]);
+
+function end() {
+  if (seed) {
+    const w = cvs.width / SLOTS, idx = Math.floor(seed.x / w);
+    const gain = Math.round(seed.val * slotMul[idx]);
     money += gain;
-    flash = {v:gain, t:performance.now()};
+    flash = { v: gain, t: performance.now() };
   }
-  seed=null; inShop=true; pending.length=0; score=0;
-  if(money<quota){ lost=true; shout('Lost: failed quota'); ui(); return; }
+  seed = null; inShop = true; pending.length = 0; score = 0;
+  if (money < quota) { lost = true; return; }
   hand++;
-  if(hand>HANDPER){ ante++; hand=1; bumps.length=0;
-    shout(`Ante ${ante-1} done — board cleared`,'#2e7d32');
-  }
+  if (hand > HANDPER) { ante++; hand = 1; bumps.length = 0; }
   nextQuota(); deal(); ui();
 }
 
-function draw(){
-  ctx.clearRect(0,0,cvs.width,cvs.height);
-  ctx.fillStyle='rgba(33,150,243,.15)'; ctx.fillRect(0,0,cvs.width,DH);
-  ctx.strokeStyle='rgba(33,150,243,.5)'; ctx.strokeRect(0,0,cvs.width,DH);
+function deal() {
+  offers = Array.from({ length: 3 }, pick);
+  bought = 0; boughtC = {};
+}
 
-  const w=cvs.width/SLOTS, top = cvs.height-BAR;
-  ctx.fillStyle='rgba(0,0,0,.05)'; ctx.fillRect(0,top,cvs.width,BAR);
-  ctx.strokeStyle='rgba(0,0,0,.2)';
-  for(let i=1;i<SLOTS;i++){ ctx.beginPath(); ctx.moveTo(w*i,cvs.height); ctx.lineTo(w*i,top); ctx.stroke(); }
-  ctx.fillStyle='#444'; ctx.font='12px Segoe UI';
-  for(let i=0;i<SLOTS;i++){ ctx.fillText(slotMul[i]+'×', w*i + w/2 - 12, cvs.height-8); }
+function ui() {
+  // Your UI update logic here (optional based on your environment)
+}
 
-  if(preX!==null){
-    ctx.setLineDash([4,4]); ctx.strokeStyle='rgba(0,0,0,.5)';
-    ctx.beginPath(); ctx.moveTo(preX,0); ctx.lineTo(preX,cvs.height); ctx.stroke();
-    ctx.setLineDash([]); ctx.beginPath(); ctx.arc(preX,R+4,R,0,Math.PI*2);
-    ctx.fillStyle='rgba(76,175,80,.45)'; ctx.fill();
-  }
+function draw() {
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  ctx.fillStyle = 'rgba(33,150,243,.15)';
+  ctx.fillRect(0, 0, cvs.width, DH);
 
-  bumps.forEach(b=>b.draw());
-
-  if(seed){
+  bumps.forEach(b => b.draw());
+  if (seed) {
     seed.upd(); seed.draw();
-    const elapsed = performance.now() - start;
-    const pct = Math.max(0, 1 - elapsed / ROUND);
-    ctx.fillStyle='rgba(255,0,0,.35)'; ctx.fillRect(0, cvs.height-6, cvs.width*pct,6);
-    if(elapsed>ROUND || seed.y>cvs.height || seed.still>STILL) end();
+    const el = performance.now() - start;
+    const pct = Math.max(0, 1 - el / ROUND);
+    ctx.fillStyle = 'rgba(255,0,0,.35)';
+    ctx.fillRect(0, cvs.height - 6, cvs.width * pct, 6);
+    if (el > ROUND || seed.y > cvs.height || seed.still > STILL) end();
   }
 
-  if(performance.now()-flash.t<1000){
-    ctx.font='20px Segoe UI'; ctx.fillStyle='#2e7d32';
-    ctx.fillText(`+$${flash.v}`,10,30);
+  if (performance.now() - flash.t < 1000) {
+    ctx.font = '20px Segoe UI'; ctx.fillStyle = '#2e7d32';
+    ctx.fillText(`+$${flash.v}`, 10, 30);
   }
 
   requestAnimationFrame(draw);
 }
 
-nextQuota(); deal(); ui(); requestAnimationFrame(draw);
+function fit() {
+  cvs.width = window.innerWidth;
+  cvs.height = window.innerHeight - 190; // match your CSS --bar-h
+}
+window.addEventListener('resize', fit);
+fit();
+
+nextQuota();
+deal();
+ui();
+requestAnimationFrame(draw);
+
 </script>
 </body>
 </html>
