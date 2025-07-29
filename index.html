@@ -43,25 +43,20 @@ body{height:100vh;display:flex;flex-direction:column;font-family:Segoe UI,Arial,
 <script>
 const cvs = document.getElementById('game');
 const ctx = cvs.getContext('2d');
-const R = 8, BUY = 3, STILL = 60, ROUND = 20000, SLOTS = 12, BAR = 26, SPC = 30, HANDPER = 4;
-const DH = 90;
 
+const DH = 90, R = 8, BUY = 3, STILL = 60, ROUND = 20000, SLOTS = 12, BAR = 26, SPC = 30, HANDPER = 4;
 let slotMul = Array(SLOTS).fill(1);
-let offers = [], pending = [], bumps = [];
-let money = 25, score = 0, quota = 10, bought = 0, boughtC = {}, seed = null;
-let inShop = true, delMode = false, preX = null, start = 0;
-let flash = { v: 0, t: 0 }, ante = 1, hand = 1, lost = false;
 
-/*** Sprites ***/
+// Sprites (base64-encoded)
 const seedImg = new Image();
-seedImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAk0lEQVRYR+2XwQ3AIAhFb9CdfZ4zXIQHnUSzCjkaTBIxWInhMM2YtWQDEyA4y6J3OlFCKqLVSm8BBKGifFKxARuEELX0bVmEdlyH1psZiLR1+NAhKf5DFmhXnLUFG+ON3RD5uwIZQumta8Cuv92EReTAu8cTdoalObYoIpAvl2TuG0EVHo3c4byQ9Cj2XYAAAAASUVORK5CYII=
-'; // paste your base64 seed PNG here
+seedImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAk0lEQVRYR+2XwQ3AIAhFb9CdfZ4zXIQHnUSzCjkaTBIxWInhMM2YtWQDEyA4y6J3OlFCKqLVSm8BBKGifFKxARuEELX0bVmEdlyH1psZiLR1+NAhKf5DFmhXnLUFG+ON3RD5uwIZQumta8Cuv92EReTAu8cTdoalObYoIpAvl2TuG0EVHo3c4byQ9Cj2XYAAAAASUVORK5CYII=';
+
 const circImg = new Image();
-circImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAkUlEQVRYR+2XwQ2AIAxFndAdTZJ0/lQv3AwcgaOkJMkkqgUN4FwMfb8zi7AWfSmAUOCSMqkBiF3nIY2gz1FIpIr4NwK4VaYxEp4AbE43qpoYHxMNRCgqWPCijKMIffRjCkA9yRhCL3BxkI3dS+6tVqfQDhVTG0LpoU7YxU8g+p7on2lGFNnkDfxo9r+0AAAAASUVORK5CYII=
-'; // paste your base64 circle bumper PNG here
+circImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAkUlEQVRYR+2XwQ2AIAxFndAdTZJ0/lQv3AwcgaOkJMkkqgUN4FwMfb8zi7AWfSmAUOCSMqkBiF3nIY2gz1FIpIr4NwK4VaYxEp4AbE43qpoYHxMNRCgqWPCijKMIffRjCkA9yRhCL3BxkI3dS+6tVqfQDhVTG0LpoU7YxU8g+p7on2lGFNnkDfxo9r+0AAAAASUVORK5CYII=';
+
 let seedOk = true, circOk = true;
 
-/*** Bumper Definitions ***/
+// Buffed circular bumpers
 const bumpers = [
   { k: 'b', id: 'speed', effect: 'speed', r: 12, v: 3, c: 6, col: '#1e88e5', n: 'Speed Boost' },
   { k: 'b', id: 'slow', effect: 'slow', r: 12, v: 4, c: 7, col: '#43a047', n: 'Slow Down' },
@@ -74,16 +69,26 @@ const tiles = [
   { k: 's', id: 't200', m: 2.0, c: 14, n: '2×', rar: 'epic' },
   { k: 's', id: 't300', m: 3.0, c: 22, n: '3×', rar: 'legendary' }
 ];
-
 const RAR = { common: 60, rare: 25, epic: 12, legendary: 3 };
-const key = c => c.k + ':' + c.id;
+
+let offers = [], pending = [], bumps = [];
+let money = 25, score = 0, quota = 10, bought = 0, boughtC = {};
+let seed = null, inShop = true, delMode = false, preX = null;
+let start = 0, flash = { v: 0, t: 0 }, ante = 1, hand = 1, lost = false;
+
+function key(card) {
+  return card.k + ':' + card.id;
+}
 
 function pick() {
   const arr = [];
   bumpers.forEach(b => arr.push({ c: b, w: 40 }));
   tiles.forEach(t => arr.push({ c: t, w: RAR[t.rar] || 1 }));
-  let tot = arr.reduce((s, o) => s + o.w, 0), r = Math.random() * tot;
-  for (const o of arr) if ((r -= o.w) <= 0) return structuredClone(o.c);
+  const tot = arr.reduce((s, o) => s + o.w, 0);
+  let r = Math.random() * tot;
+  for (const o of arr) {
+    if ((r -= o.w) <= 0) return structuredClone(o.c);
+  }
   return structuredClone(arr[0].c);
 }
 
@@ -112,21 +117,37 @@ class Seed {
       const dx = this.x - b.x, dy = this.y - b.y, d = Math.hypot(dx, dy);
       if (d < R + b.r) {
         const nx = dx / d, ny = dy / d, ov = R + b.r - d + 0.5;
-        this.x += nx * ov; this.y += ny * ov;
+        this.x += nx * ov;
+        this.y += ny * ov;
         const dot = this.vx * nx + this.vy * ny;
         this.vx = (this.vx - 2 * dot * nx) * 0.7;
         this.vy = (this.vy - 2 * dot * ny) * 0.7;
+
         if (b !== this.last) {
-          score += b.v; this.val += b.v;
-          if (b.effect === 'speed') { this.vx *= 1.2; this.vy *= 1.2; }
-          if (b.effect === 'slow') { this.vx *= 0.8; this.vy *= 0.8; }
-          if (b.effect === 'bonus') { score += 5; this.val += 5; }
+          score += b.v;
+          this.val += b.v;
+
+          if (b.effect === 'speed') {
+            this.vx *= 1.2;
+            this.vy *= 1.2;
+          }
+          if (b.effect === 'slow') {
+            this.vx *= 0.8;
+            this.vy *= 0.8;
+          }
+          if (b.effect === 'bonus') {
+            score += 5;
+            this.val += 5;
+          }
+
           flash = { v: b.v + (b.effect === 'bonus' ? 5 : 0), t: performance.now() };
           this.last = b;
         }
       }
     }
-    if (this.last && Math.hypot(this.x - this.last.x, this.y - this.last.y) > R + this.last.r) this.last = null;
+    if (this.last && Math.hypot(this.x - this.last.x, this.y - this.last.y) > R + this.last.r) {
+      this.last = null;
+    }
   }
 
   draw() {
@@ -147,7 +168,8 @@ class Bump {
   }
 
   draw() {
-    ctx.save(); ctx.translate(this.x, this.y);
+    ctx.save();
+    ctx.translate(this.x, this.y);
     if (circOk) {
       ctx.drawImage(circImg, -this.r, -this.r, this.r * 2, this.r * 2);
     } else {
@@ -160,6 +182,7 @@ class Bump {
   }
 }
 
+// === Core Logic ===
 function startNextRound() {
   if (seed || lost) return;
   if (inShop) { inShop = false; delMode = false; ui(); }
@@ -176,20 +199,33 @@ function end() {
     money += gain;
     flash = { v: gain, t: performance.now() };
   }
-  seed = null; inShop = true; pending.length = 0; score = 0;
-  if (money < quota) { lost = true; return; }
+  seed = null;
+  inShop = true;
+  pending.length = 0;
+  score = 0;
+  if (money < quota) {
+    lost = true;
+    return;
+  }
   hand++;
-  if (hand > HANDPER) { ante++; hand = 1; bumps.length = 0; }
-  nextQuota(); deal(); ui();
+  if (hand > HANDPER) {
+    ante++;
+    hand = 1;
+    bumps.length = 0;
+  }
+  nextQuota();
+  deal();
+  ui();
 }
 
 function deal() {
   offers = Array.from({ length: 3 }, pick);
-  bought = 0; boughtC = {};
+  bought = 0;
+  boughtC = {};
 }
 
 function ui() {
-  // Your UI update logic here (optional based on your environment)
+  // implement this for game stats display
 }
 
 function draw() {
@@ -199,7 +235,8 @@ function draw() {
 
   bumps.forEach(b => b.draw());
   if (seed) {
-    seed.upd(); seed.draw();
+    seed.upd();
+    seed.draw();
     const el = performance.now() - start;
     const pct = Math.max(0, 1 - el / ROUND);
     ctx.fillStyle = 'rgba(255,0,0,.35)';
@@ -208,20 +245,21 @@ function draw() {
   }
 
   if (performance.now() - flash.t < 1000) {
-    ctx.font = '20px Segoe UI'; ctx.fillStyle = '#2e7d32';
+    ctx.font = '20px Segoe UI';
+    ctx.fillStyle = '#2e7d32';
     ctx.fillText(`+$${flash.v}`, 10, 30);
   }
 
   requestAnimationFrame(draw);
 }
 
+// Setup
 function fit() {
   cvs.width = window.innerWidth;
-  cvs.height = window.innerHeight - 190; // match your CSS --bar-h
+  cvs.height = window.innerHeight - 190;
 }
 window.addEventListener('resize', fit);
 fit();
-
 nextQuota();
 deal();
 ui();
